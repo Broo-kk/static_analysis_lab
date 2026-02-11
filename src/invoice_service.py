@@ -54,63 +54,13 @@ class InvoiceService:
         if problems:
             raise ValueError("; ".join(problems))
 
-        subtotal = 0.0
-        fragile_fee = 0.0
-        for it in inv.items:
-            line = it.unit_price * it.qty
-            subtotal += line
-            if it.fragile:
-                fragile_fee += 5.0 * it.qty
+        subtotal, fragile_fee = self._compute_subtotal_and_fragile_fee(inv.items)
+        shipping = self._compute_shipping(inv.country, subtotal)
 
-        shipping = 0.0
-        if inv.country == "TH":
-            if subtotal < 500:
-                shipping = 60
-            else:
-                shipping = 0
-        elif inv.country == "JP":
-            if subtotal < 4000:
-                shipping = 600
-            else:
-                shipping = 0
-        elif inv.country == "US":
-            if subtotal < 100:
-                shipping = 15
-            elif subtotal < 300:
-                shipping = 8
-            else:
-                shipping = 0
-        else:
-            if subtotal < 200:
-                shipping = 25
-            else:
-                shipping = 0
+        discount = self._compute_membership_discount(inv.membership, subtotal)
+        discount += self._apply_coupon(inv.coupon, subtotal, warnings)
 
-        discount = 0.0
-        if inv.membership == "gold":
-            discount += subtotal * 0.03
-        elif inv.membership == "platinum":
-            discount += subtotal * 0.05
-        else:
-            if subtotal > 3000:
-                discount += 20
-
-        if inv.coupon is not None and inv.coupon.strip() != "":
-            code = inv.coupon.strip()
-            if code in self._coupon_rate:
-                discount += subtotal * self._coupon_rate[code]
-            else:
-                warnings.append("Unknown coupon")
-
-        tax = 0.0
-        if inv.country == "TH":
-            tax = (subtotal - discount) * 0.07
-        elif inv.country == "JP":
-            tax = (subtotal - discount) * 0.10
-        elif inv.country == "US":
-            tax = (subtotal - discount) * 0.08
-        else:
-            tax = (subtotal - discount) * 0.05
+        tax = self._compute_tax(inv.country, subtotal, discount)
 
         total = subtotal + shipping + fragile_fee + tax - discount
         if total < 0:
@@ -120,3 +70,53 @@ class InvoiceService:
             warnings.append("Consider membership upgrade")
 
         return total, warnings
+
+    def _compute_subtotal_and_fragile_fee(self, items: List[LineItem]) -> Tuple[float, float]:
+        subtotal = 0.0
+        fragile_fee = 0.0
+        for it in items:
+            subtotal += it.unit_price * it.qty
+            if it.fragile:
+                fragile_fee += 5.0 * it.qty
+        return subtotal, fragile_fee
+
+    def _compute_shipping(self, country: str, subtotal: float) -> float:
+        if country == "TH":
+            return 60 if subtotal < 500 else 0
+        if country == "JP":
+            return 600 if subtotal < 4000 else 0
+        if country == "US":
+            if subtotal < 100:
+                return 15
+            if subtotal < 300:
+                return 8
+            return 0
+        return 25 if subtotal < 200 else 0
+
+    def _compute_membership_discount(self, membership: str, subtotal: float) -> float:
+        if membership == "gold":
+            return subtotal * 0.03
+        if membership == "platinum":
+            return subtotal * 0.05
+        return 20 if subtotal > 3000 else 0.0
+
+    def _apply_coupon(self, coupon: Optional[str], subtotal: float, warnings: List[str]) -> float:
+        if coupon is None or coupon.strip() == "":
+            return 0.0
+        code = coupon.strip()
+        if code in self._coupon_rate:
+            return subtotal * self._coupon_rate[code]
+        warnings.append("Unknown coupon")
+        return 0.0
+
+    def _compute_tax(self, country: str, subtotal: float, discount: float) -> float:
+        base = subtotal - discount
+        if country == "TH":
+            rate = 0.07
+        elif country == "JP":
+            rate = 0.10
+        elif country == "US":
+            rate = 0.08
+        else:
+            rate = 0.05
+        return base * rate
